@@ -2,95 +2,70 @@ from flask import Flask, request, render_template_string
 import cv2
 import numpy as np
 import re
-import ipaddress
-from urllib.parse import urlsplit, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs
 from sklearn.ensemble import RandomForestClassifier
 
 app = Flask(__name__)
 
-# =========================================================
-# SECURITY DATA
-# =========================================================
-
-SUSPICIOUS_WORDS = [
-    "verify", "verification", "login", "signin", "sign-in",
-    "urgent", "claim", "reward", "free", "password",
-    "payment", "wallet", "update", "security", "confirm",
-    "bank", "refund", "bonus", "gift", "prize", "otp", "kyc"
-]
-
-SHORTENERS = {
-    "bit.ly", "tinyurl.com", "t.co", "goo.gl", "is.gd",
-    "ow.ly", "buff.ly", "cutt.ly", "shorturl.at",
-    "rb.gy", "rebrand.ly", "tiny.cc", "lnkd.in"
-}
-
-SUSPICIOUS_TLDS = {
-    "zip", "top", "click", "gq", "tk", "ml", "ga",
-    "cf", "work", "country"
-}
-
-FEATURE_NAMES = [
-    "https",
-    "ip_host",
-    "at_symbol",
-    "credentials",
-    "punycode",
-    "many_subdomains",
-    "long_url",
-    "long_path",
-    "suspicious_words",
-    "query_params",
-    "nonstandard_port",
-    "percent_encoded",
-    "url_shortener",
-    "suspicious_tld",
-    "unicode_host",
-    "long_host",
-    "many_hyphens"
-]
-
 
 # =========================================================
-# SYNTHETIC ML MODEL
+# AI / DEMO MODEL
 # =========================================================
 
-def create_model():
-
-    rng = np.random.default_rng(42)
+def create_demo_model():
     rows = []
 
-    weights = np.array([
-        -8, 25, 20, 20, 25, 12, 8, 8, 15,
-        4, 10, 5, 15, 8, 15, 8, 5
-    ])
+    for _ in range(1000):
+        https = np.random.randint(0, 2)
+        long_url = np.random.randint(0, 2)
+        has_at = np.random.randint(0, 2)
+        has_ip = np.random.randint(0, 2)
+        punycode = np.random.randint(0, 2)
+        many_subdomains = np.random.randint(0, 2)
+        suspicious_words = np.random.randint(0, 2)
+        query = np.random.randint(0, 2)
+        long_path = np.random.randint(0, 2)
+        shortener = np.random.randint(0, 2)
+        unusual_port = np.random.randint(0, 2)
 
-    for _ in range(1500):
-
-        features = rng.integers(
-            0, 2, size=len(FEATURE_NAMES)
+        risk_points = (
+            (1 - https) * 1
+            + long_url * 1
+            + has_at * 3
+            + has_ip * 3
+            + punycode * 3
+            + many_subdomains * 2
+            + suspicious_words * 2
+            + query * 1
+            + long_path * 1
+            + shortener * 2
+            + unusual_port * 2
         )
 
-        features[0] = rng.choice(
-            [0, 1],
-            p=[0.2, 0.8]
-        )
+        label = int(risk_points >= 5)
 
-        score = float(np.dot(features, weights))
-        score += rng.normal(0, 7)
+        rows.append([
+            https,
+            long_url,
+            has_at,
+            has_ip,
+            punycode,
+            many_subdomains,
+            suspicious_words,
+            query,
+            long_path,
+            shortener,
+            unusual_port,
+            label
+        ])
 
-        label = int(score >= 32)
+    data = np.array(rows)
 
-        rows.append(list(features) + [label])
-
-    model_data = np.array(rows)
-
-    X = model_data[:, :-1]
-    y = model_data[:, -1]
+    X = data[:, :-1]
+    y = data[:, -1]
 
     model = RandomForestClassifier(
         n_estimators=150,
-        max_depth=8,
         random_state=42
     )
 
@@ -99,7 +74,98 @@ def create_model():
     return model
 
 
-model = create_model()
+model = create_demo_model()
+
+
+# =========================================================
+# URL FEATURE EXTRACTION
+# =========================================================
+
+def extract_features(url):
+
+    url_lower = url.lower().strip()
+
+    parsed = urlparse(url_lower)
+
+    hostname = parsed.hostname or ""
+
+    suspicious_words_list = [
+        "verify",
+        "login",
+        "urgent",
+        "claim",
+        "reward",
+        "free",
+        "password",
+        "payment",
+        "wallet",
+        "update",
+        "account",
+        "confirm",
+        "security",
+        "refund"
+    ]
+
+    shortener_domains = [
+        "bit.ly",
+        "tinyurl.com",
+        "t.co",
+        "goo.gl",
+        "is.gd",
+        "cutt.ly",
+        "rb.gy",
+        "shorturl.at"
+    ]
+
+    features = {
+        "https": int(url_lower.startswith("https://")),
+
+        "long_url": int(len(url) > 100),
+
+        "has_at": int("@" in url),
+
+        "has_ip": int(bool(
+            re.search(
+                r"https?://\d{1,3}(\.\d{1,3}){3}",
+                url_lower
+            )
+        )),
+
+        "punycode": int(
+            "xn--" in hostname
+        ),
+
+        "many_subdomains": int(
+            hostname.count(".") >= 4
+        ),
+
+        "suspicious_words": int(
+            any(word in url_lower for word in suspicious_words_list)
+        ),
+
+        "query": int(
+            bool(parsed.query)
+        ),
+
+        "long_path": int(
+            len(parsed.path) > 80
+        ),
+
+        "shortener": int(
+            any(
+                hostname == domain or
+                hostname.endswith("." + domain)
+                for domain in shortener_domains
+            )
+        ),
+
+        "unusual_port": int(
+            parsed.port is not None and
+            parsed.port not in [80, 443]
+        )
+    }
+
+    return features
 
 
 # =========================================================
@@ -108,256 +174,157 @@ model = create_model()
 
 def analyze_url(raw_url):
 
-    value = raw_url.strip()
+    url = raw_url.strip()
 
-    if not value:
+    if not url:
         return {
-            "valid": False,
-            "error": "Empty URL."
+            "level": "UNKNOWN",
+            "score": 0,
+            "ai_probability": 0,
+            "domain": "",
+            "url": "",
+            "reasons": [],
+            "action": "Enter a URL to analyze."
         }
 
-    # Add HTTPS if user gives only a domain
-    if not re.match(
-        r"^[a-zA-Z][a-zA-Z0-9+.-]*://",
-        value
-    ):
-        value = "https://" + value
+    # Add scheme if user enters only a domain
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
+        url = "https://" + url
 
-    try:
-        parsed = urlsplit(value)
-    except ValueError:
-        return {
-            "valid": False,
-            "error": "URL could not be parsed."
-        }
+    features = extract_features(url)
 
-    if parsed.scheme.lower() not in ["http", "https"]:
-        return {
-            "valid": False,
-            "error": "Only HTTP and HTTPS links are currently analyzed."
-        }
-
-    if not parsed.hostname:
-        return {
-            "valid": False,
-            "error": "No domain/hostname found."
-        }
-
-    host = parsed.hostname.lower()
-
-    # IP detection
-    try:
-        is_ip = 1
-        ipaddress.ip_address(host)
-    except ValueError:
-        is_ip = 0
-
-    try:
-        port = parsed.port
-    except ValueError:
-        return {
-            "valid": False,
-            "error": "Invalid port."
-        }
-
-    tld = (
-        host.rsplit(".", 1)[-1]
-        if "." in host else ""
-    )
-
-    word_hits = [
-        word for word in SUSPICIOUS_WORDS
-        if word in value.lower()
-    ]
-
-    features = {
-        "https": int(parsed.scheme.lower() == "https"),
-        "ip_host": is_ip,
-        "at_symbol": int("@" in value),
-        "credentials": int(
-            parsed.username is not None
-            or parsed.password is not None
-        ),
-        "punycode": int("xn--" in host),
-        "many_subdomains": int(host.count(".") >= 3),
-        "long_url": int(len(value) > 120),
-        "long_path": int(len(parsed.path) > 80),
-        "suspicious_words": int(bool(word_hits)),
-        "query_params": int(bool(parsed.query)),
-        "nonstandard_port": int(
-            port is not None
-            and not (
-                (parsed.scheme.lower() == "http" and port == 80)
-                or
-                (parsed.scheme.lower() == "https" and port == 443)
-            )
-        ),
-        "percent_encoded": int("%" in value),
-        "url_shortener": int(
-            host in SHORTENERS
-            or any(host.endswith("." + x) for x in SHORTENERS)
-        ),
-        "suspicious_tld": int(
-            tld in SUSPICIOUS_TLDS
-        ),
-        "unicode_host": int(
-            any(ord(ch) > 127 for ch in host)
-        ),
-        "long_host": int(len(host) > 45),
-        "many_hyphens": int(host.count("-") >= 3)
-    }
-
-    feature_vector = np.array([[
-        features[name]
-        for name in FEATURE_NAMES
-    ]])
+    values = np.array([
+        list(features.values())
+    ])
 
     ai_probability = float(
-        model.predict_proba(feature_vector)[0][1]
-    )
-
-    # Explicit security scoring
-    weights = {
-        "https": -8,
-        "ip_host": 25,
-        "at_symbol": 20,
-        "credentials": 20,
-        "punycode": 25,
-        "many_subdomains": 12,
-        "long_url": 8,
-        "long_path": 8,
-        "suspicious_words": 15,
-        "query_params": 4,
-        "nonstandard_port": 10,
-        "percent_encoded": 5,
-        "url_shortener": 15,
-        "suspicious_tld": 8,
-        "unicode_host": 15,
-        "long_host": 8,
-        "many_hyphens": 5
-    }
-
-    points = sum(
-        weights[name]
-        for name in weights
-        if features[name]
-    )
-
-    rule_score = max(
-        0,
-        min(100, points)
-    )
-
-    final_score = (
-        rule_score * 0.55
-        +
-        ai_probability * 100 * 0.45
+        model.predict_proba(values)[0][1]
     )
 
     reasons = []
 
     if not features["https"]:
-        reasons.append("Connection does not use HTTPS.")
+        reasons.append(
+            "Connection does not use HTTPS."
+        )
 
-    if features["ip_host"]:
+    if features["long_url"]:
+        reasons.append(
+            "URL is unusually long."
+        )
+
+    if features["has_at"]:
+        reasons.append(
+            "URL contains an @ symbol."
+        )
+
+    if features["has_ip"]:
         reasons.append(
             "Destination uses an IP address instead of a normal domain."
         )
 
-    if features["at_symbol"]:
-        reasons.append("URL contains an @ symbol.")
-
-    if features["credentials"]:
+    if features["punycode"]:
         reasons.append(
-            "URL contains embedded username/password information."
+            "Domain contains punycode, which can be used for look-alike domains."
         )
 
-    if features["punycode"]:
-        reasons.append("Domain contains punycode.")
-
     if features["many_subdomains"]:
-        reasons.append("Domain contains many subdomains.")
-
-    if features["long_url"]:
-        reasons.append("URL is unusually long.")
-
-    if features["long_path"]:
-        reasons.append("URL path is unusually long.")
+        reasons.append(
+            "URL contains many subdomains."
+        )
 
     if features["suspicious_words"]:
         reasons.append(
-            "Suspicious-looking keywords detected: "
-            + ", ".join(word_hits[:5])
+            "URL contains words commonly associated with social-engineering attempts."
         )
 
-    if features["query_params"]:
-        reasons.append("URL contains query parameters.")
-
-    if features["nonstandard_port"]:
+    if features["query"]:
         reasons.append(
-            f"Non-standard port detected: {port}."
+            "URL contains query parameters."
         )
 
-    if features["percent_encoded"]:
+    if features["long_path"]:
         reasons.append(
-            "URL contains percent-encoded characters."
+            "URL contains an unusually long path."
         )
 
-    if features["url_shortener"]:
+    if features["shortener"]:
         reasons.append(
             "URL uses a known URL-shortening service."
         )
 
-    if features["suspicious_tld"]:
+    if features["unusual_port"]:
         reasons.append(
-            f"Domain uses .{tld}, which is treated as a risk signal."
+            "URL uses an unusual network port."
         )
 
-    if features["unicode_host"]:
-        reasons.append(
-            "Domain contains non-ASCII characters."
-        )
+    signal_count = len(reasons)
 
-    if features["long_host"]:
-        reasons.append(
-            "Hostname is unusually long."
-        )
+    # Rule-based score
+    rule_points = (
+        (1 - features["https"]) * 8
+        + features["long_url"] * 7
+        + features["has_at"] * 20
+        + features["has_ip"] * 20
+        + features["punycode"] * 20
+        + features["many_subdomains"] * 12
+        + features["suspicious_words"] * 12
+        + features["query"] * 5
+        + features["long_path"] * 6
+        + features["shortener"] * 10
+        + features["unusual_port"] * 10
+    )
 
-    if features["many_hyphens"]:
-        reasons.append(
-            "Hostname contains many hyphens."
-        )
+    rule_score = min(rule_points, 100)
 
-    if final_score >= 65:
-        risk = "HIGH RISK"
-    elif final_score >= 35:
-        risk = "MEDIUM RISK"
+    # Combine static rules + ML estimate
+    final_score = (
+        rule_score * 0.65
+        + ai_probability * 100 * 0.35
+    )
+
+    final_score = round(
+        min(max(final_score, 0), 100),
+        1
+    )
+
+    if final_score >= 65 or signal_count >= 5:
+        level = "HIGH RISK"
+
+    elif final_score >= 30 or signal_count >= 2:
+        level = "MEDIUM RISK"
+
     else:
-        risk = "LOW RISK"
+        level = "LOW RISK"
 
-    if risk == "HIGH RISK":
+    parsed = urlparse(url)
+
+    domain = parsed.hostname or "Unknown"
+
+    if level == "HIGH RISK":
         action = (
-            "Do not open or pay through this destination "
-            "until it has been independently verified."
+            "Do not proceed without independent verification. "
+            "Avoid entering passwords, OTPs or payment credentials."
         )
-    elif risk == "MEDIUM RISK":
+
+    elif level == "MEDIUM RISK":
         action = (
-            "Verify the destination, merchant and payment "
-            "details before continuing."
+            "Verify the destination and recipient independently "
+            "before continuing."
         )
+
     else:
         action = (
             "No strong suspicious indicators were detected. "
-            "Still verify the destination before payment."
+            "Still verify the destination before payment or login."
         )
 
     return {
-        "valid": True,
-        "risk": risk,
+        "level": level,
         "score": final_score,
-        "ai_probability": ai_probability,
-        "domain": host,
-        "url": value,
+        "ai_probability": round(ai_probability * 100, 1),
+        "domain": domain,
+        "url": url,
         "reasons": reasons,
         "action": action
     }
@@ -371,6 +338,7 @@ def decode_qr(file_bytes):
 
     try:
 
+        # Convert uploaded bytes into an OpenCV image
         image_array = np.frombuffer(
             file_bytes,
             dtype=np.uint8
@@ -386,32 +354,137 @@ def decode_qr(file_bytes):
 
         detector = cv2.QRCodeDetector()
 
-        data, _, _ = detector.detectAndDecode(image)
+        # -------------------------------------------------
+        # Attempt 1: Original image
+        # -------------------------------------------------
+
+        data, points, _ = detector.detectAndDecode(image)
 
         if data:
             return data.strip()
+
+        # -------------------------------------------------
+        # Attempt 2: Multiple QR codes
+        # -------------------------------------------------
+
+        try:
+
+            ok, decoded_info, points, _ = (
+                detector.detectAndDecodeMulti(image)
+            )
+
+            if ok and decoded_info:
+
+                for item in decoded_info:
+
+                    if item and item.strip():
+                        return item.strip()
+
+        except Exception:
+            pass
+
+        # -------------------------------------------------
+        # Prepare grayscale
+        # -------------------------------------------------
 
         gray = cv2.cvtColor(
             image,
             cv2.COLOR_BGR2GRAY
         )
 
-        gray = cv2.resize(
+        # -------------------------------------------------
+        # Attempt 3: Enlarged images
+        # -------------------------------------------------
+
+        processed_images = []
+
+        for scale in [2, 3, 4]:
+
+            enlarged = cv2.resize(
+                gray,
+                None,
+                fx=scale,
+                fy=scale,
+                interpolation=cv2.INTER_CUBIC
+            )
+
+            processed_images.append(enlarged)
+
+        # -------------------------------------------------
+        # Attempt 4: Threshold
+        # -------------------------------------------------
+
+        _, threshold = cv2.threshold(
             gray,
-            None,
-            fx=2,
-            fy=2,
-            interpolation=cv2.INTER_CUBIC
+            0,
+            255,
+            cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
 
-        data, _, _ = detector.detectAndDecode(gray)
+        processed_images.append(threshold)
+
+        # -------------------------------------------------
+        # Attempt 5: Adaptive threshold
+        # -------------------------------------------------
+
+        adaptive = cv2.adaptiveThreshold(
+            gray,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            31,
+            5
+        )
+
+        processed_images.append(adaptive)
+
+        # -------------------------------------------------
+        # Try all processed images
+        # -------------------------------------------------
+
+        for processed in processed_images:
+
+            data, points, _ = (
+                detector.detectAndDecode(processed)
+            )
+
+            if data:
+                return data.strip()
+
+            try:
+
+                ok, decoded_info, points, _ = (
+                    detector.detectAndDecodeMulti(processed)
+                )
+
+                if ok and decoded_info:
+
+                    for item in decoded_info:
+
+                        if item and item.strip():
+                            return item.strip()
+
+            except Exception:
+                pass
+
+        # -------------------------------------------------
+        # Attempt 6: Inverted image
+        # -------------------------------------------------
+
+        inverted = cv2.bitwise_not(gray)
+
+        data, points, _ = (
+            detector.detectAndDecode(inverted)
+        )
 
         if data:
             return data.strip()
 
         return ""
 
-    except Exception:
+    except Exception as e:
+
+        print("QR decode error:", e)
 
         return ""
 
@@ -420,14 +493,18 @@ def decode_qr(file_bytes):
 # QR TYPE DETECTION
 # =========================================================
 
-def detect_qr_type(data):
+def detect_qr_type(content):
 
-    lower = data.strip().lower()
+    text = content.strip()
+
+    lower = text.lower()
 
     if lower.startswith("upi://pay"):
         return "UPI PAYMENT"
 
-    if lower.startswith("http://") or lower.startswith("https://"):
+    if lower.startswith("http://") or \
+       lower.startswith("https://"):
+
         return "WEB URL"
 
     if lower.startswith("mailto:"):
@@ -439,10 +516,91 @@ def detect_qr_type(data):
     if lower.startswith("wifi:"):
         return "WI-FI"
 
-    if "http://" in lower or "https://" in lower:
-        return "TEXT WITH URL"
+    if "begin:vcard" in lower:
+        return "CONTACT"
 
     return "TEXT / OTHER"
+
+
+# =========================================================
+# UPI ANALYSIS
+# =========================================================
+
+def analyze_upi(content):
+
+    try:
+
+        parsed = urlparse(content)
+
+        params = parse_qs(
+            parsed.query
+        )
+
+        payee = params.get(
+            "pa",
+            [None]
+        )[0]
+
+        name = params.get(
+            "pn",
+            [None]
+        )[0]
+
+        amount = params.get(
+            "am",
+            [None]
+        )[0]
+
+        currency = params.get(
+            "cu",
+            ["INR"]
+        )[0]
+
+        reasons = []
+
+        if not payee:
+            reasons.append(
+                "No payee UPI ID was found in the payload."
+            )
+
+        else:
+            if "@" not in payee:
+                reasons.append(
+                    "The payee identifier does not follow a typical UPI ID format."
+                )
+
+        if not amount:
+            amount_text = "Not specified"
+        else:
+            amount_text = amount + " " + currency
+
+        action = (
+            "Verify the payee name and UPI ID independently "
+            "before making any payment."
+        )
+
+        return {
+            "payee": payee or "Not specified",
+            "name": name or "Not specified",
+            "amount": amount_text,
+            "reasons": reasons,
+            "action": action
+        }
+
+    except Exception:
+
+        return {
+            "payee": "Unable to parse",
+            "name": "Unable to parse",
+            "amount": "Unable to parse",
+            "reasons": [
+                "The UPI payload could not be fully parsed."
+            ],
+            "action": (
+                "Verify the payment details independently "
+                "before continuing."
+            )
+        }
 
 
 # =========================================================
@@ -451,614 +609,743 @@ def detect_qr_type(data):
 
 HTML = """
 <!DOCTYPE html>
+
 <html>
+
 <head>
 
-    <title>QRShield</title>
+<meta name="viewport"
+      content="width=device-width, initial-scale=1">
 
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QRShield</title>
 
-    <style>
+<style>
 
-        * {
-            box-sizing: border-box;
-        }
+* {
+    box-sizing: border-box;
+}
 
-        body {
-            margin: 0;
-            font-family: Arial, sans-serif;
-            background: #0b1220;
-            color: #f8fafc;
-        }
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #07101f;
+    color: #f5f7fb;
+}
 
-        .container {
-            width: 92%;
-            max-width: 950px;
-            margin: 40px auto;
-        }
+.container {
+    width: 92%;
+    max-width: 1000px;
+    margin: auto;
+    padding: 35px 0 50px;
+}
 
-        .hero {
-            text-align: center;
-            padding: 30px;
-        }
+.header {
+    text-align: center;
+    margin-bottom: 35px;
+}
 
-        .hero h1 {
-            font-size: 52px;
-            margin: 0;
-        }
+.logo {
+    font-size: 48px;
+    font-weight: 800;
+}
 
-        .hero h2 {
-            margin: 8px 0;
-            font-size: 22px;
-        }
+.subtitle {
+    font-size: 21px;
+    font-weight: bold;
+    margin-top: 5px;
+}
 
-        .hero p {
-            opacity: 0.75;
-        }
+.tagline {
+    color: #9ca9bc;
+    margin-top: 10px;
+}
 
-        .card {
-            background: #111827;
-            border: 1px solid #263244;
-            border-radius: 18px;
-            padding: 24px;
-            margin-top: 20px;
-        }
+.card {
+    background: #101a2c;
+    border: 1px solid #25334a;
+    border-radius: 18px;
+    padding: 28px;
+    margin-bottom: 25px;
+}
 
-        input[type=text],
-        input[type=file] {
-            width: 100%;
-            padding: 14px;
-            margin-top: 10px;
-            border-radius: 10px;
-            border: 1px solid #334155;
-            background: #0f172a;
-            color: white;
-        }
+h2 {
+    margin-top: 0;
+}
 
-        button {
-            width: 100%;
-            padding: 14px;
-            margin-top: 15px;
-            border: none;
-            border-radius: 10px;
-            background: #2563eb;
-            color: white;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-        }
+input[type=text] {
+    width: 100%;
+    padding: 15px;
+    border-radius: 10px;
+    border: 1px solid #35445e;
+    background: #0b1424;
+    color: white;
+    font-size: 16px;
+    margin: 12px 0;
+}
 
-        button:hover {
-            opacity: 0.9;
-        }
+input[type=file] {
+    width: 100%;
+    padding: 15px;
+    background: #0b1424;
+    border-radius: 10px;
+    color: white;
+    margin: 12px 0;
+}
 
-        .risk {
-            padding: 16px;
-            border-radius: 12px;
-            margin-top: 18px;
-            font-size: 22px;
-            font-weight: bold;
-        }
+button {
+    width: 100%;
+    padding: 15px;
+    border: 0;
+    border-radius: 10px;
+    background: #2563eb;
+    color: white;
+    font-size: 17px;
+    font-weight: bold;
+    cursor: pointer;
+}
 
-        .high {
-            background: #451a1a;
-            color: #fecaca;
-        }
+button:hover {
+    background: #1d4ed8;
+}
 
-        .medium {
-            background: #422006;
-            color: #fed7aa;
-        }
+.result {
+    margin-top: 20px;
+}
 
-        .low {
-            background: #052e1b;
-            color: #bbf7d0;
-        }
+.risk {
+    padding: 18px;
+    border-radius: 12px;
+    font-size: 24px;
+    font-weight: bold;
+    margin: 15px 0;
+}
 
-        .signal {
-            padding: 10px 0;
-            border-bottom: 1px solid #243047;
-        }
+.high {
+    background: #45151a;
+    border: 1px solid #ef4444;
+}
 
-        .metric {
-            display: inline-block;
-            width: 48%;
-            padding: 15px;
-            background: #0f172a;
-            border-radius: 10px;
-            margin-top: 15px;
-        }
+.medium {
+    background: #45340e;
+    border: 1px solid #f59e0b;
+}
 
-        .warning {
-            background: #172554;
-            padding: 15px;
-            border-radius: 10px;
-            margin-top: 18px;
-        }
+.low {
+    background: #073b29;
+    border: 1px solid #22c55e;
+}
 
-        .success {
-            background: #052e1b;
-            padding: 15px;
-            border-radius: 10px;
-            margin-top: 18px;
-        }
+.info {
+    background: #10243d;
+    border: 1px solid #31557d;
+    padding: 16px;
+    border-radius: 10px;
+    margin-top: 15px;
+}
 
-        .footer {
-            text-align: center;
-            opacity: 0.6;
-            margin: 30px;
-        }
+.warning {
+    background: #33260b;
+    border: 1px solid #d99b16;
+    padding: 16px;
+    border-radius: 10px;
+    margin-top: 15px;
+}
 
-    </style>
+.success {
+    background: #073b29;
+    border: 1px solid #22c55e;
+    padding: 16px;
+    border-radius: 10px;
+    margin-top: 15px;
+}
+
+.signal {
+    padding: 8px 0;
+}
+
+.open-button {
+    display: inline-block;
+    padding: 12px 20px;
+    background: #2563eb;
+    color: white;
+    text-decoration: none;
+    border-radius: 8px;
+    font-weight: bold;
+    margin-top: 10px;
+}
+
+.footer {
+    text-align: center;
+    color: #7f8da3;
+    margin-top: 35px;
+}
+
+.small {
+    color: #9ca9bc;
+    font-size: 14px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+}
+
+td {
+    padding: 10px;
+    border-bottom: 1px solid #27354c;
+}
+
+td:first-child {
+    font-weight: bold;
+    width: 35%;
+}
+
+code {
+    word-break: break-all;
+}
+
+</style>
 
 </head>
+
 
 <body>
 
 <div class="container">
 
-    <div class="hero">
+<div class="header">
 
-        <h1>🛡️ QRShield</h1>
+<div class="logo">
+🛡️ QRShield
+</div>
 
-        <h2>The Payment Trap Investigator</h2>
+<div class="subtitle">
+The Payment Trap Investigator
+</div>
 
-        <p>
-            Detect • Explain • Assist
-        </p>
+<div class="tagline">
+Detect • Explain • Assist
+</div>
 
-        <p>
-            Analyze any decodable QR or URL for suspicious
-            security characteristics.
-        </p>
-
-    </div>
-
-
-    <div class="card">
-
-        <h2>🔗 Analyze Any URL or Domain</h2>
-
-        <form method="POST">
-
-            <input
-                type="hidden"
-                name="action"
-                value="url"
-            >
-
-            <input
-                type="text"
-                name="url"
-                placeholder="https://example.com or example.com"
-                required
-            >
-
-            <button type="submit">
-                🔍 Analyze Link
-            </button>
-
-        </form>
-
-    </div>
+</div>
 
 
-    <div class="card">
+<!-- URL SECTION -->
 
-        <h2>📷 Analyze Any QR</h2>
+<div class="card">
 
-        <form method="POST" enctype="multipart/form-data">
+<h2>🔗 Analyze Any URL or Domain</h2>
 
-            <input
-                type="hidden"
-                name="action"
-                value="qr"
-            >
+<p class="small">
+Analyze a website or payment destination for suspicious
+security characteristics.
+</p>
 
-            <input
-                type="file"
-                name="qr"
-                accept=".png,.jpg,.jpeg"
-                required
-            >
+<form method="POST">
 
-            <button type="submit">
-                📷 Decode & Analyze QR
-            </button>
+<input
+    type="text"
+    name="url"
+    placeholder="https://example.com"
+    value="{{ entered_url }}"
+>
 
-        </form>
+<button type="submit" name="action" value="url">
+🔍 Analyze URL
+</button>
 
-    </div>
+</form>
 
-
-    {% if result %}
-
-    <div class="card">
-
-        {% if result.error %}
-
-            <div class="warning">
-                ⚠️ {{ result.error }}
-            </div>
-
-        {% else %}
-
-            {% if result.risk == "HIGH RISK" %}
-
-                <div class="risk high">
-                    🚨 HIGH RISK
-                </div>
-
-            {% elif result.risk == "MEDIUM RISK" %}
-
-                <div class="risk medium">
-                    ⚠️ MEDIUM RISK
-                </div>
-
-            {% else %}
-
-                <div class="risk low">
-                    ✅ LOW RISK
-                </div>
-
-            {% endif %}
+</div>
 
 
-            <div class="metric">
+<!-- QR SECTION -->
 
-                <b>AI-Assisted Risk Score</b>
+<div class="card">
 
-                <br>
+<h2>📷 Analyze Any QR</h2>
 
-                {{ "%.1f"|format(result.score) }}%
+<p class="small">
+Upload a QR image. QRShield will decode the payload,
+identify its type and analyze the destination when applicable.
+</p>
 
-            </div>
+<form method="POST"
+      enctype="multipart/form-data">
+
+<input
+    type="file"
+    name="qr_file"
+    accept=".png,.jpg,.jpeg"
+    required
+>
+
+<button type="submit" name="action" value="qr">
+📷 Decode & Analyze QR
+</button>
+
+</form>
+
+</div>
 
 
-            <div class="metric">
+{% if url_result %}
 
-                <b>AI Estimate</b>
+<div class="card">
 
-                <br>
+<h2>🛡️ QRShield Security Assessment</h2>
 
-                {{ "%.1f"|format(result.ai_probability * 100) }}%
+<div class="risk
+{% if url_result.level == 'HIGH RISK' %}
+high
+{% elif url_result.level == 'MEDIUM RISK' %}
+medium
+{% else %}
+low
+{% endif %}
+">
 
-            </div>
+{% if url_result.level == 'HIGH RISK' %}
+🚨
+{% elif url_result.level == 'MEDIUM RISK' %}
+⚠️
+{% else %}
+✅
+{% endif %}
+
+{{ url_result.level }}
+
+</div>
 
 
-            <h3>🌐 Domain</h3>
+<table>
 
-            <p>
-                {{ result.domain }}
-            </p>
+<tr>
+<td>AI-Assisted Risk Score</td>
+<td>{{ url_result.score }}%</td>
+</tr>
+
+<tr>
+<td>AI Estimate</td>
+<td>{{ url_result.ai_probability }}%</td>
+</tr>
+
+<tr>
+<td>Domain</td>
+<td>{{ url_result.domain }}</td>
+</tr>
+
+<tr>
+<td>Analyzed URL</td>
+<td>
+<code>{{ url_result.url }}</code>
+</td>
+</tr>
+
+</table>
 
 
-            <h3>🔗 Analyzed URL</h3>
+<h3>🔎 Detected Security Signals</h3>
 
-            <p style="word-break: break-all;">
-                {{ result.url }}
-            </p>
-            <p>
-    
-    <a href="{{ result.url }}" target="_blank" rel="noopener noreferrer"
-       style="display:inline-block; padding:12px 20px; background:#2563eb; color:white; text-decoration:none; border-radius:8px; font-weight:bold;">
-        🔗 Open Destination
-    </a>
+{% if url_result.reasons %}
+
+{% for reason in url_result.reasons %}
+
+<div class="signal">
+• {{ reason }}
+</div>
+
+{% endfor %}
+
+{% else %}
+
+<div class="success">
+✅ No obvious suspicious signals detected.
+</div>
+
+{% endif %}
+
+
+<div class="info">
+
+<strong>Recommended Action</strong>
+
+<br><br>
+
+{{ url_result.action }}
+
+</div>
+
+
+<p>
+
+<a
+    class="open-button"
+    href="{{ url_result.url }}"
+    target="_blank"
+    rel="noopener noreferrer"
+>
+
+🔗 Open Destination
+
+</a>
+
 </p>
 
 
-            <h3>🔎 Detected Security Signals</h3>
+<p class="small">
+QRShield performs static feature-based analysis.
+It does not guarantee that a destination is completely safe.
+</p>
 
-            {% if result.reasons %}
+</div>
 
-                {% for reason in result.reasons %}
+{% endif %}
 
-                    <div class="signal">
-                        ⚠️ {{ reason }}
-                    </div>
 
-                {% endfor %}
+{% if qr_result %}
 
-            {% else %}
+<div class="card">
 
-                <div class="signal">
-                    ✅ No obvious suspicious signals detected.
-                </div>
+<h2>📦 QR Analysis Result</h2>
 
-            {% endif %}
+<h3>Decoded Content:</h3>
 
+<div class="info">
+<code>{{ qr_result.content }}</code>
+</div>
 
-            <div class="warning">
+<h3>
+Detected Type:
+{{ qr_result.type }}
+</h3>
 
-                <b>🛡️ Recommended Action</b>
 
-                <br><br>
+{% if qr_result.type == "WEB URL" %}
 
-                {{ result.action }}
+{% if qr_result.url_result %}
 
-            </div>
+<div class="risk
+{% if qr_result.url_result.level == 'HIGH RISK' %}
+high
+{% elif qr_result.url_result.level == 'MEDIUM RISK' %}
+medium
+{% else %}
+low
+{% endif %}
+">
 
+{% if qr_result.url_result.level == 'HIGH RISK' %}
+🚨
+{% elif qr_result.url_result.level == 'MEDIUM RISK' %}
+⚠️
+{% else %}
+✅
+{% endif %}
 
-            <div class="warning">
+{{ qr_result.url_result.level }}
 
-                ℹ️ QRShield performs static feature-based
-                analysis. It does not open the destination and
-                cannot guarantee that a URL is safe.
+</div>
 
-            </div>
 
-        {% endif %}
+<table>
 
-    </div>
+<tr>
+<td>AI-Assisted Risk Score</td>
+<td>{{ qr_result.url_result.score }}%</td>
+</tr>
 
-    {% endif %}
+<tr>
+<td>AI Estimate</td>
+<td>{{ qr_result.url_result.ai_probability }}%</td>
+</tr>
 
+<tr>
+<td>Domain</td>
+<td>{{ qr_result.url_result.domain }}</td>
+</tr>
 
-    {% if qr_result %}
+</table>
 
-    <div class="card">
 
-        <h2>📦 QR Analysis Result</h2>
+<h3>🔎 Security Signals</h3>
 
-        <p>
-            <b>Decoded Content:</b>
-        </p>
+{% if qr_result.url_result.reasons %}
 
-        <p style="word-break: break-all;">
-            {{ qr_result.content }}
-        </p>
+{% for reason in qr_result.url_result.reasons %}
 
-        <p>
-            <b>Detected Type:</b>
-            {{ qr_result.qr_type }}
-        </p>
+<div class="signal">
+• {{ reason }}
+</div>
 
+{% endfor %}
 
-        {% if qr_result.web_result %}
+{% else %}
 
-            {% set result = qr_result.web_result %}
+<div class="success">
+✅ No obvious suspicious signals detected.
+</div>
 
-            {% if result.risk == "HIGH RISK" %}
+{% endif %}
 
-                <div class="risk high">
-                    🚨 HIGH RISK
-                </div>
 
-            {% elif result.risk == "MEDIUM RISK" %}
+<div class="info">
 
-                <div class="risk medium">
-                    ⚠️ MEDIUM RISK
-                </div>
+<strong>Recommended Action</strong>
 
-            {% else %}
+<br><br>
 
-                <div class="risk low">
-                    ✅ LOW RISK
-                </div>
+{{ qr_result.url_result.action }}
 
-            {% endif %}
+</div>
 
 
-            <div class="metric">
+<a
+    class="open-button"
+    href="{{ qr_result.url_result.url }}"
+    target="_blank"
+    rel="noopener noreferrer"
+>
 
-                <b>Risk Score</b>
+🔗 Open Destination
 
-                <br>
+</a>
 
-                {{ "%.1f"|format(result.score) }}%
+{% endif %}
 
-            </div>
 
+{% elif qr_result.type == "UPI PAYMENT" %}
 
-            <h3>🌐 Domain</h3>
+<div class="warning">
 
-            <p>
-                {{ result.domain }}
-            </p>
+<strong>💳 UPI PAYMENT DETECTED</strong>
 
+</div>
 
-            <h3>🔎 Security Signals</h3>
 
-            {% if result.reasons %}
+<table>
 
-                {% for reason in result.reasons %}
+<tr>
+<td>Payee UPI ID</td>
+<td>{{ qr_result.upi.payee }}</td>
+</tr>
 
-                    <div class="signal">
-                        ⚠️ {{ reason }}
-                    </div>
+<tr>
+<td>Payee Name</td>
+<td>{{ qr_result.upi.name }}</td>
+</tr>
 
-                {% endfor %}
+<tr>
+<td>Amount</td>
+<td>{{ qr_result.upi.amount }}</td>
+</tr>
 
-            {% else %}
+</table>
 
-                <div class="signal">
-                    ✅ No obvious suspicious signals detected.
-                </div>
 
-            {% endif %}
+<h3>🔎 Payment Security Checks</h3>
 
+{% if qr_result.upi.reasons %}
 
-            <div class="warning">
+{% for reason in qr_result.upi.reasons %}
 
-                <b>🛡️ Recommended Action</b>
+<div class="signal">
+• {{ reason }}
+</div>
 
-                <br><br>
+{% endfor %}
 
-                {{ result.action }}
+{% else %}
 
-            </div>
+<div class="success">
+✅ UPI payment payload structure detected successfully.
+</div>
 
-        {% elif qr_result.message %}
+{% endif %}
 
-            <div class="success">
-                ✅ {{ qr_result.message }}
-            </div>
 
-        {% endif %}
+<div class="warning">
 
-    </div>
+<strong>Recommended Action</strong>
 
-    {% endif %}
+<br><br>
 
+{{ qr_result.upi.action }}
 
-    <div class="footer">
+</div>
 
-        🛡️ QRShield • AI × Cybersecurity Mini Hackathon 2026
 
-        <br>
+{% elif qr_result.type == "EMAIL" %}
 
-        Prototype using synthetic demonstration data.
+<div class="info">
+📧 This QR contains an email destination.
+Verify the recipient before sending sensitive information.
+</div>
 
-    </div>
+
+{% elif qr_result.type == "PHONE" %}
+
+<div class="info">
+📞 This QR contains a phone number.
+Verify the number before calling.
+</div>
+
+
+{% elif qr_result.type == "WI-FI" %}
+
+<div class="info">
+📶 This QR contains Wi-Fi configuration information.
+Only scan Wi-Fi QRs from trusted sources.
+</div>
+
+
+{% elif qr_result.type == "CONTACT" %}
+
+<div class="info">
+👤 This QR contains contact information.
+Verify the source before saving the contact.
+</div>
+
+
+{% else %}
+
+<div class="info">
+📝 This QR contains text or another payload type.
+QRShield decoded it successfully but it is not a web destination.
+</div>
+
+{% endif %}
+
+</div>
+
+{% endif %}
+
+
+<div class="footer">
+
+🛡️ QRShield • AI × Cybersecurity Mini Hackathon 2026
+
+<br>
+
+<span class="small">
+Prototype using synthetic demonstration data.
+Results are advisory and not a guarantee of safety.
+</span>
+
+</div>
 
 </div>
 
 </body>
+
 </html>
 """
 
 
 # =========================================================
-# ROUTE
+# MAIN ROUTE
 # =========================================================
 
 @app.route("/", methods=["GET", "POST"])
 def home():
 
-    result = None
+    url_result = None
     qr_result = None
+    entered_url = ""
 
     if request.method == "POST":
 
-        action = request.form.get("action")
+        action = request.form.get(
+            "action",
+            ""
+        )
 
-        # -------------------------------
-        # URL
-        # -------------------------------
+        # -------------------------------------------------
+        # URL ANALYSIS
+        # -------------------------------------------------
 
         if action == "url":
 
-            url = request.form.get(
+            entered_url = request.form.get(
                 "url",
                 ""
-            )
+            ).strip()
 
-            result = analyze_url(url)
+            if entered_url:
 
-        # -------------------------------
-        # QR
-        # -------------------------------
+                url_result = analyze_url(
+                    entered_url
+                )
+
+        # -------------------------------------------------
+        # QR ANALYSIS
+        # -------------------------------------------------
 
         elif action == "qr":
 
-            uploaded = request.files.get(
-                "qr"
+            uploaded_file = request.files.get(
+                "qr_file"
             )
 
-            if uploaded:
+            if uploaded_file:
 
-                payload = decode_qr(
-                    uploaded.read()
+                file_bytes = uploaded_file.read()
+
+                decoded = decode_qr(
+                    file_bytes
                 )
 
-                if not payload:
-
-                    qr_result = {
-                        "content": "",
-                        "qr_type": "Unknown",
-                        "message": (
-                            "Could not decode this QR. "
-                            "Try a clear image with the complete "
-                            "QR visible."
-                        )
-                    }
-
-                else:
+                if decoded:
 
                     qr_type = detect_qr_type(
-                        payload
+                        decoded
                     )
 
-                    web_result = None
-                    message = None
+                    qr_result = {
+                        "content": decoded,
+                        "type": qr_type,
+                        "url_result": None,
+                        "upi": None
+                    }
 
                     if qr_type == "WEB URL":
 
-                        web_result = analyze_url(
-                            payload
+                        qr_result["url_result"] = (
+                            analyze_url(decoded)
                         )
-
-                    elif qr_type == "TEXT WITH URL":
-
-                        found_urls = re.findall(
-                            r"https?://[^\s]+",
-                            payload
-                        )
-
-                        if found_urls:
-
-                            web_result = analyze_url(
-                                found_urls[0]
-                            )
 
                     elif qr_type == "UPI PAYMENT":
 
-                        message = (
-                            "UPI payment payload detected. "
-                            "The QR was decoded successfully. "
-                            "Verify the payee and amount before paying."
+                        qr_result["upi"] = (
+                            analyze_upi(decoded)
                         )
 
-                    elif qr_type == "EMAIL":
-
-                        message = (
-                            "Email QR detected. "
-                            "The payload was decoded successfully."
-                        )
-
-                    elif qr_type == "PHONE":
-
-                        message = (
-                            "Phone QR detected. "
-                            "The payload was decoded successfully."
-                        )
-
-                    elif qr_type == "WI-FI":
-
-                        message = (
-                            "Wi-Fi QR detected. "
-                            "The payload was decoded successfully."
-                        )
-
-                    else:
-
-                        message = (
-                            "QR decoded successfully. "
-                            "The payload is not a web URL."
-                        )
+                else:
 
                     qr_result = {
-                        "content": payload,
-                        "qr_type": qr_type,
-                        "web_result": web_result,
-                        "message": message
+                        "content": "",
+                        "type": "UNKNOWN",
+                        "url_result": None,
+                        "upi": None
                     }
 
     return render_template_string(
         HTML,
-        result=result,
-        qr_result=qr_result
+        url_result=url_result,
+        qr_result=qr_result,
+        entered_url=entered_url
     )
 
 
 # =========================================================
-# START SERVER
+# RUN SERVER
 # =========================================================
 
 if __name__ == "__main__":
 
     app.run(
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=5000,
         debug=False
     )
