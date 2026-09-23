@@ -738,6 +738,13 @@ HTML = """
             <p style="word-break: break-all;">
                 {{ result.url }}
             </p>
+            <p>
+    
+    <a href="{{ result.url }}" target="_blank" rel="noopener noreferrer"
+       style="display:inline-block; padding:12px 20px; background:#2563eb; color:white; text-decoration:none; border-radius:8px; font-weight:bold;">
+        🔗 Open Destination
+    </a>
+</p>
 
 
             <h3>🔎 Detected Security Signals</h3>
